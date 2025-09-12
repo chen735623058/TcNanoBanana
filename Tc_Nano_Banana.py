@@ -24,9 +24,6 @@ class GeminiOpenAIProxyNode:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "api_base_url": ("STRING", {
-                    "default": "https://example.com"
-                }),
                 "api_key": ("STRING", {
                     "default": "place-your-key-here"
                 }),
@@ -37,9 +34,9 @@ class GeminiOpenAIProxyNode:
                 "model_type": ("STRING", {
                     "default": "gemini-2.5-flash-image-preview"
                 }),
-                "batch_size": ("INT", {
-                    "default": 1, "min": 1, "max": 4
-                }),
+                # "batch_size": ("INT", {
+                #     "default": 1, "min": 1, "max": 4
+                # }),
                 "seed": ("INT", {
                     "default": 1024, "min": -1, "max": 102400
                 }),
@@ -71,7 +68,7 @@ class GeminiOpenAIProxyNode:
             images.append(img_array)
         return torch.from_numpy(np.stack(images))
     
-    def create_request_data(self, prompt: str, seed: int, input_images: List[torch.Tensor] = None) -> Dict:
+    def create_request_data(self, prompt: str,model_type:str, seed: int, input_images: List[torch.Tensor] = None) -> Dict:
         """构建请求数据"""
         # 基于种子添加风格变化
         if seed != -1:
@@ -112,24 +109,25 @@ class GeminiOpenAIProxyNode:
         if seed != -1:
             generation_config["seed"] = seed
         
-        return {
-            "contents": [{"role": "user", "parts": parts}],
-            "generationConfig": generation_config
+        return{
+            "model": model_type,
+            "data":{
+                "contents": [{"role": "user", "parts": parts}],
+                "generationConfig": generation_config
+            }
         }
 
-    def send_request(self, api_key: str, request_data: Dict, model_type: str, 
-                    api_base_url: str) -> Dict:
+    def send_request(self, api_key: str, request_data: Dict) -> Dict:
         """发送API请求 - 仅非流式模式"""
-        endpoint = "generateContent"
-        url = f"{api_base_url.rstrip('/')}/v1beta/models/{model_type}:{endpoint}"
-        
+
+        url = "http://aiinone.seasungame.com:8000/ai_in_one/v2/createImage"
         headers = {
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {api_key}',
             'User-Agent': 'ComfyUI-Gemini-Node/1.0'
         }
         
-        print(f"发起非流式请求到: {url}")
+        print(f"发起非流式请求到")
         
         response = requests.post(url, headers=headers, json=request_data, timeout=180)
         
@@ -167,7 +165,7 @@ class GeminiOpenAIProxyNode:
 
         return base64_images, text_content.strip()
 
-    def generate_images(self, api_base_url, api_key, prompt, model_type, batch_size, seed,
+    def generate_images(self, api_key, prompt, model_type, batch_size, seed,
                        input_image_1=None, input_image_2=None, input_image_3=None, 
                        input_image_4=None, input_image_5=None):
         
@@ -189,10 +187,10 @@ class GeminiOpenAIProxyNode:
             
             try:
                 # 构建请求数据
-                request_data = self.create_request_data(prompt, current_seed, input_images)
+                request_data = self.create_request_data(prompt, model_type,current_seed, input_images)
                 
                 # 发送请求（仅非流式）
-                response_data = self.send_request(api_key, request_data, model_type, api_base_url)
+                response_data = self.send_request(api_key, request_data)
                 
                 # 提取内容
                 base64_images, text_content = self.extract_content(response_data)
