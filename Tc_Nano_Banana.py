@@ -165,10 +165,10 @@ class GeminiOpenAIProxyNode:
 
         return base64_images, text_content.strip()
 
-    def generate_images(self, api_key, prompt, model_type, batch_size, seed,
+    def generate_images(self, api_key, prompt, model_type, seed,
                        input_image_1=None, input_image_2=None, input_image_3=None, 
                        input_image_4=None, input_image_5=None):
-        
+        batch_size = 1
         start_time = time.time()
         input_images = [img for img in [input_image_1, input_image_2, input_image_3, input_image_4, input_image_5] if img is not None]
         
