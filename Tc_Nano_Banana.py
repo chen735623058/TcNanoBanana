@@ -94,24 +94,58 @@ class GeminiOpenAIProxyNode:
         return base64.b64encode(buffered.getvalue()).decode()
 
     def base64_to_tensor(self, base64_strings: List[str]) -> torch.Tensor:
-        """将base64转换为tensor"""
-        images = []
+        """将base64转换为tensor，并确保所有图像尺寸一致 (以最后一张为基准)"""
+        pil_images = []
+
+        # 第一步：先将所有 base64 解析为 PIL Image 对象，过滤掉损坏的数据
         for b64_str in base64_strings:
-            img_data = base64.b64decode(b64_str)
-            img = Image.open(BytesIO(img_data)).convert('RGB')
+            try:
+                img_data = base64.b64decode(b64_str)
+                img = Image.open(BytesIO(img_data)).convert('RGB')
+                pil_images.append(img)
+            except Exception as e:
+                print(f"解析 Base64 图像时出错并跳过: {e}")
+                continue
+
+        # 兜底：如果所有图片都解析失败，返回一张 64x64 的黑图防止节点崩溃
+        if not pil_images:
+            print("警告: 没有成功解析出任何有效图像，输出默认黑图")
+            return torch.zeros((1, 64, 64, 3), dtype=torch.float32)
+
+        # 第二步：获取列表里最后一张图的尺寸作为全局基准
+        target_size = pil_images[-1].size
+        if len(pil_images) > 1:
+            print(f"设定基准尺寸为最后一张图的尺寸: {target_size}")
+
+        # 确定高质量缩放算法 (兼容不同版本的 Pillow 库)
+        if hasattr(Image, 'Resampling'):
+            resample_filter = Image.Resampling.LANCZOS
+        else:
+            resample_filter = Image.LANCZOS
+
+        # 第三步：统一尺寸并转换为 numpy 数组
+        images = []
+        for img in pil_images:
+            # 如果某张图片的尺寸与最后一张的基准尺寸不一致，则进行强制缩放
+            if img.size != target_size:
+                print(f"节点警告: 发现尺寸不一致的图像 ({img.size})，正在强制缩放至基准尺寸 ({target_size})")
+                img = img.resize(target_size, resample_filter)
+
+            # 转为 ComfyUI 需要的 Float32 格式 (0.0 到 1.0 之间)
             img_array = np.array(img).astype(np.float32) / 255.0
             images.append(img_array)
+
         return torch.from_numpy(np.stack(images))
     
     def create_request_data(self, prompt: str,model_type:str, seed: int,aspect_ratio:str,resolution:str, input_images: List[torch.Tensor] = None) -> Dict:
         """构建请求数据"""
         # 基于种子添加风格变化
-        if seed != -1:
+        if seed  == -1:
             np.random.seed(seed)
             random.seed(seed)
             style_variations = [
                 "detailed, high quality",
-                "masterpiece, ultra detailed", 
+                "masterpiece, ultra detailed",
                 "photorealistic, stunning",
                 "artistic, beautiful composition",
                 "vibrant colors, sharp focus"
@@ -120,7 +154,7 @@ class GeminiOpenAIProxyNode:
             final_prompt = f"{prompt}, {style}"
         else:
             final_prompt = prompt
-            
+
         parts = [{"text": final_prompt}]
         
         # 添加输入图像
