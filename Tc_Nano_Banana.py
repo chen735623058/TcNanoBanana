@@ -7,9 +7,9 @@ import numpy as np
 import torch
 from typing import List, Dict, Optional
 import re
-import random
 import time
 from enum import Enum
+import random
 
 class ResolutionOptions(Enum):
     # 枚举成员名称（内部标识）建议与显示文本对应，方便理解
@@ -33,12 +33,11 @@ class GeminiOpenAIProxyNode:
     """
     ComfyUI节点: Gemini图像生成 - 非流式模式，支持多张图片和种子
     """
-    
+
     RETURN_TYPES = ("IMAGE", "STRING")
     RETURN_NAMES = ("images", "text")
     FUNCTION = "generate_images"
     CATEGORY = "image/ai_generation"
-    
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -50,38 +49,78 @@ class GeminiOpenAIProxyNode:
                     "multiline": True,
                     "default": "Hello nano banana!"
                 }),
-                "model_type": ("STRING", {
-                    "default": "gemini-2.5-flash-image-preview"
-                }),
-                # "batch_size": ("INT", {
-                #     "default": 1, "min": 1, "max": 4
-                # }),
-                "aspect_ratio": (
-                    # 从枚举中提取 UI 显示的选项列表（枚举值的 value）
-                    [option.value for option in AspectRatioOptions],
+                "model_type": (
+                    [
+                        "nanobanana2-art-gufeng",
+                        "nanobanana2-art-xiandai",
+                        "nanobanana-art-xiandai",
+                        "nanobanana-art-gufeng",
+                        "nanobanana2-art-gufeng-flash",
+                        "nanobanana2-art-xiandai-flash",
+                        "chatgptImage"
+                    ],
                     {
-                        "default": AspectRatioOptions.LANDSCAPE_16_9.value,  # 默认 16:9
-                        "tooltip": "Select aspect ratio (e.g., 16:9, 1:1)"  # 工具提示
+                        "default": "nanobanana2-art-gufeng",
+                        "tooltip": "选择图像生成模型\n【NanoBanana系列】使用 aspect_ratio 和 resolution 参数\n【ChatGPT】使用 chatgpt_size 和 chatgpt_quality 参数"
                     }
-                ),
-                "resolution": (
-                    # 从枚举类中提取 UI 显示的选项列表（"1K", "2K", "4K", "8K"）
-                    [option.value for option in ResolutionOptions],
-                    {
-                        "default": ResolutionOptions.RES_1K.value,  # 默认选中 "2K"
-                        "tooltip": "Select resolution (1K/2K/4K)"  # 可选：工具提示
-                    }
-                ),
-                "seed": ("INT", {
-                    "default": 1024, "min": -1, "max": 102400
-                }),
+                )
             },
             "optional": {
+                # ===== 输入图像 =====
                 "input_image_1": ("IMAGE",),
                 "input_image_2": ("IMAGE",),
                 "input_image_3": ("IMAGE",),
                 "input_image_4": ("IMAGE",),
                 "input_image_5": ("IMAGE",),
+
+                # ===== NanoBanana 模型专用参数 =====
+                "nanobanana_aspect_ratio": (
+                    [option.value for option in AspectRatioOptions],
+                    {
+                        "default": AspectRatioOptions.LANDSCAPE_16_9.value,
+                        "tooltip": "❗ 仅用于 NanoBanana 模型\n选择宽高比 (例如: 16:9, 1:1)\nChatGPT 模型请忽略此参数"
+                    }
+                ),
+                "nanobanana_resolution": (
+                    [option.value for option in ResolutionOptions],
+                    {
+                        "default": ResolutionOptions.RES_1K.value,
+                        "tooltip": "❗ 仅用于 NanoBanana 模型\n选择分辨率 (1K/2K/4K)\nChatGPT 模型请忽略此参数"
+                    }
+                ),
+
+                # ===== ChatGPT 模型专用参数 =====
+                "chatgpt_size": (
+                    [
+                        "auto",
+                        "1024x1024",
+                        "1536x1024",
+                        "1024x1536",
+                        "2048x2048",
+                        "2048x1152",
+                        "3840x2160",
+                        "2160x3840"
+                    ],
+                    {
+                        "default": "auto",
+                        "tooltip": "❗ 仅用于 ChatGPT 模型\n选择生成图片的尺寸大小\nNanoBanana 模型请忽略此参数"
+                    }
+                ),
+                "chatgpt_quality": (
+                    [
+                        "auto",
+                        "low",
+                        "medium",
+                        "high"
+                    ],
+                    {
+                        "default": "auto",
+                        "tooltip": "❗ 仅用于 ChatGPT 模型\n选择生成图片的质量等级\nNanoBanana 模型请忽略此参数"
+                    }
+                ),
+                "seed": ("INT", {
+                    "default": 1024, "min": -1, "max": 102400
+                }),
             }
         }
     
@@ -137,26 +176,64 @@ class GeminiOpenAIProxyNode:
 
         return torch.from_numpy(np.stack(images))
     
-    def create_request_data(self, prompt: str,model_type:str, seed: int,aspect_ratio:str,resolution:str, input_images: List[torch.Tensor] = None) -> Dict:
-        """构建请求数据"""
-        # 基于种子添加风格变化
-        if seed  == -1:
-            np.random.seed(seed)
-            random.seed(seed)
-            style_variations = [
-                "detailed, high quality",
-                "masterpiece, ultra detailed",
-                "photorealistic, stunning",
-                "artistic, beautiful composition",
-                "vibrant colors, sharp focus"
-            ]
-            style = style_variations[seed % len(style_variations)]
-            final_prompt = f"{prompt}, {style}"
-        else:
-            final_prompt = prompt
+    def create_request_data(self, prompt: str, model_type: str, nanobanana_aspect_ratio: str, nanobanana_resolution: str,
+                           input_images: List[torch.Tensor] = None, chatgpt_size: str = None,
+                           chatgpt_quality: str = None) -> Dict:
+        """构建请求数据
+
+        支持两种模型类型的不同参数配置：
+        - NanoBanana 模型: 使用 nanobanana_aspect_ratio 和 nanobanana_resolution 参数
+        - ChatGPT 模型: 使用 chatgpt_size 和 chatgpt_quality 参数
+        """
+        final_prompt = prompt
+
+        # ===== ChatGPT 模型专用处理 =====
+        if model_type == "chatgptImage":
+            # ChatGPT 参数直接使用
+            size = chatgpt_size if chatgpt_size else "auto"
+            quality = chatgpt_quality if chatgpt_quality else "auto"
+
+            print(f"ChatGPT Size: {size}")
+            print(f"ChatGPT Quality: {quality}")
+            print(f"使用 ChatGPT 模型配置: size={size}, quality={quality}")
+
+            # ChatGPT 也使用相同的结构，只是 generationConfig 参数不同
+            parts = [{"text": final_prompt}]
+
+            # 添加输入图像
+            if input_images:
+                for image_tensor in input_images:
+                    if image_tensor is not None:
+                        base64_image = self.tensor_to_base64(image_tensor)
+                        parts.append({
+                            "inlineData": {
+                                "mimeType": "image/png",
+                                "data": base64_image
+                            }
+                        })
+
+            generation_config = {
+                "responseModalities": ["TEXT", "IMAGE"],
+                "temperature": 0.8,
+                "maxOutputTokens": 8192,
+                "size": size,
+                "quality": quality
+            }
+
+            return {
+                "model": model_type,
+                "data": {
+                    "contents": [{"role": "user", "parts": parts}],
+                    "generationConfig": generation_config
+                }
+            }
+
+        # ===== NanoBanana 模型专用处理 =====
+        # 这些模型使用 nanobanana_aspect_ratio 和 nanobanana_resolution 参数
+        print(f"使用 NanoBanana 模型配置: aspect_ratio={nanobanana_aspect_ratio}, resolution={nanobanana_resolution}")
 
         parts = [{"text": final_prompt}]
-        
+
         # 添加输入图像
         if input_images:
             for image_tensor in input_images:
@@ -168,21 +245,18 @@ class GeminiOpenAIProxyNode:
                             "data": base64_image
                         }
                     })
-        
+
         generation_config = {
             "responseModalities": ["TEXT", "IMAGE"],
             "temperature": 0.8,
             "maxOutputTokens": 8192,
-            "aspect_ratio":aspect_ratio,
-            "resolution":resolution
+            "aspect_ratio": nanobanana_aspect_ratio,
+            "resolution": nanobanana_resolution
         }
-        
-        if seed != -1:
-            generation_config["seed"] = seed
-        
-        return{
+
+        return {
             "model": model_type,
-            "data":{
+            "data": {
                 "contents": [{"role": "user", "parts": parts}],
                 "generationConfig": generation_config
             }
@@ -191,7 +265,7 @@ class GeminiOpenAIProxyNode:
     def send_request(self, api_key: str, request_data: Dict) -> Dict:
         """发送API请求 - 仅非流式模式"""
 
-        url = "http://aiinone.seasungame.com:8000/ai_in_one/v2/createImage"
+        url = "https://tech.seasungame.com/ai_in_one/v2/createImage"
         headers = {
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {api_key}',
@@ -236,60 +310,59 @@ class GeminiOpenAIProxyNode:
 
         return base64_images, text_content.strip()
 
-    def generate_images(self, api_key, prompt, model_type,aspect_ratio,resolution, seed,
-                       input_image_1=None, input_image_2=None, input_image_3=None, 
-                       input_image_4=None, input_image_5=None):
+    def generate_images(self, api_key, prompt, model_type, nanobanana_aspect_ratio, nanobanana_resolution,
+                       input_image_1=None, input_image_2=None, input_image_3=None,
+                       input_image_4=None, input_image_5=None, chatgpt_size=None,
+                       chatgpt_quality=None, seed=0):
         batch_size = 1
         start_time = time.time()
         input_images = [img for img in [input_image_1, input_image_2, input_image_3, input_image_4, input_image_5] if img is not None]
-        
-        # 处理种子
-        if seed == -1:
-            base_seed = random.randint(0, 102400)
-        else:
-            base_seed = seed
-        
+
+        np.random.seed(seed)
+        random.seed(seed)    
+
         all_b64_images = []
         all_texts = []
-        
+
         for i in range(batch_size):
-            current_seed = base_seed + i if seed != -1 else -1
-            print(f"\n生成第 {i+1}/{batch_size} 张图片 (种子: {current_seed if current_seed != -1 else '随机'})")
-            
+            print(f"\n生成第 {i+1}/{batch_size} 张图片")
+
             try:
                 # 构建请求数据
-                request_data = self.create_request_data(prompt, model_type,current_seed,aspect_ratio,resolution,input_images)
-                
+                request_data = self.create_request_data(prompt, model_type, nanobanana_aspect_ratio,
+                                                        nanobanana_resolution, input_images, chatgpt_size,
+                                                        chatgpt_quality)
+
                 # 发送请求（仅非流式）
                 response_data = self.send_request(api_key, request_data)
-                
+
                 # 提取内容
                 base64_images, text_content = self.extract_content(response_data)
-                
+
                 all_b64_images.extend(base64_images)
                 if text_content:
-                    all_texts.append(f"[种子: {current_seed}] {text_content}")
-                    
+                    all_texts.append(text_content)
+
             except Exception as e:
                 error_msg = f"生成第 {i+1} 张图片失败: {str(e)}"
                 print(error_msg)
                 all_texts.append(error_msg)
-        
+
         # 计算耗时
         total_time = time.time() - start_time
         time_info = f"生图完成，耗时: {total_time:.2f}秒"
         print(f"\n{time_info}")
-        
+
         if not all_b64_images:
             if all_texts:
                 return (torch.zeros((1, 64, 64, 3), dtype=torch.float32), f"{time_info}\n" + "\n".join(all_texts))
             else:
                 raise Exception("未生成任何图像或文本内容")
-        
+
         # 转换图像
         image_tensor = self.base64_to_tensor(all_b64_images)
         combined_text = f"{time_info}\n" + ("\n".join(all_texts) if all_texts else f"成功生成 {len(all_b64_images)} 张图像")
-        
+
         print(f"最终完成！共生成 {len(all_b64_images)} 张图片")
         return (image_tensor, combined_text)
 
