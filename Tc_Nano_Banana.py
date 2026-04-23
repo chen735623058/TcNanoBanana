@@ -273,8 +273,8 @@ class GeminiOpenAIProxyNode:
         }
         
         print(f"发起非流式请求到")
-        
-        response = requests.post(url, headers=headers, json=request_data, timeout=180)
+
+        response = requests.post(url, headers=headers, json=request_data, timeout=600)
         
         if response.status_code != 200:
             raise Exception(f"API请求失败 {response.status_code}: {response.text}")
